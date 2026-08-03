@@ -5,3 +5,6 @@ __pycache__/
 *.docx
 *.pptx
 *.png
+
+# generated documents and previews are throwaway; README artwork is not
+!docs/*.png
