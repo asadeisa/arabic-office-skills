@@ -32,8 +32,11 @@ Usage
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -264,19 +267,52 @@ class ArabicPptx:
 # Verification
 # --------------------------------------------------------------------------
 
-PPT_PATHS = [
-    r"C:\Program Files\Microsoft Office\root\Office16\POWERPNT.EXE",
-    r"C:\Program Files (x86)\Microsoft Office\root\Office16\POWERPNT.EXE",
-    r"C:\Program Files (x86)\Microsoft Office\Office16\POWERPNT.EXE",
-]
+def find_powerpoint():
+    """Locate POWERPNT.EXE across Office versions. Windows only — the conversion
+    below drives PowerPoint through COM, which does not exist elsewhere."""
+    if sys.platform != "win32":
+        return None
+    roots = [os.environ.get("ProgramFiles", r"C:\Program Files"),
+             os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")]
+    subdirs = ["root/Office16", "Office16", "root/Office15", "Office15", "Office14"]
+    for root in roots:
+        for sub in subdirs:
+            cand = Path(root) / "Microsoft Office" / sub / "POWERPNT.EXE"
+            if cand.exists():
+                return str(cand)
+    return None
+
+
+def find_soffice():
+    """Locate LibreOffice — PATH first, then the usual install locations on
+    Windows, macOS and Linux, since it is rarely on PATH on the first two."""
+    found = shutil.which("soffice") or shutil.which("soffice.exe")
+    if found:
+        return found
+    candidates = [
+        r"C:\Program Files\LibreOffice\program\soffice.exe",
+        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+        "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+        "/usr/bin/soffice", "/usr/local/bin/soffice", "/snap/bin/libreoffice",
+    ]
+    return next((c for c in candidates if Path(c).exists()), None)
+
+
+NO_CONVERTER = (
+    "Cannot render a preview: neither Microsoft PowerPoint nor LibreOffice was "
+    "found. Install LibreOffice (https://www.libreoffice.org) — headless "
+    "conversion is enough — or open the .pptx on a machine that has PowerPoint. "
+    "The deck itself is already written; only the visual check needs a converter."
+)
 
 
 def pptx_to_pdf(pptx_path, pdf_path=None):
     """Convert through PowerPoint (or LibreOffice) so slides can be rendered."""
     pptx_path = Path(pptx_path).resolve()
     pdf_path = Path(pdf_path).resolve() if pdf_path else pptx_path.with_suffix(".pdf")
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if any(Path(p).exists() for p in PPT_PATHS):
+    if find_powerpoint():
         script = f'''
 $ErrorActionPreference = "Stop"
 $app = New-Object -ComObject PowerPoint.Application
@@ -289,15 +325,28 @@ $app.Quit()
                                          encoding="utf-8") as fh:
             fh.write(script)
             ps = fh.name
-        subprocess.run(["powershell", "-NoProfile", "-NonInteractive",
-                        "-ExecutionPolicy", "Bypass", "-File", ps],
-                       check=True, capture_output=True)
-        Path(ps).unlink(missing_ok=True)
-        return str(pdf_path)
+        try:
+            subprocess.run(["powershell", "-NoProfile", "-NonInteractive",
+                            "-ExecutionPolicy", "Bypass", "-File", ps],
+                           check=True, capture_output=True)
+        except subprocess.CalledProcessError:
+            pass          # PowerPoint may be busy or unlicensed; fall back below
+        finally:
+            Path(ps).unlink(missing_ok=True)
+        if pdf_path.exists():
+            return str(pdf_path)
 
-    subprocess.run(["soffice", "--headless", "--convert-to", "pdf",
+    soffice = find_soffice()
+    if not soffice:
+        raise RuntimeError(NO_CONVERTER)
+
+    subprocess.run([soffice, "--headless", "--convert-to", "pdf",
                     "--outdir", str(pdf_path.parent), str(pptx_path)],
                    check=True, capture_output=True)
+    # LibreOffice names the output after the *source* file, ignoring pdf_path.
+    produced = pdf_path.parent / f"{pptx_path.stem}.pdf"
+    if produced != pdf_path and produced.exists():
+        produced.replace(pdf_path)
     return str(pdf_path)
 
 

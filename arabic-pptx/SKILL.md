@@ -23,28 +23,39 @@ writes it to the XML directly. **Use it rather than reinventing this.**
 pip install python-pptx pypdfium2
 ```
 
+Writing the .pptx needs nothing else. Rendering the preview needs Microsoft
+PowerPoint (any version, via COM on Windows) or LibreOffice (`soffice`, any
+platform) — whichever is present is found automatically.
+
 ## Building a deck
 
+Import the builder either by copying `scripts/arabic_pptx.py` next to your
+generation script, or by adding this skill's `scripts/` folder to `sys.path`:
+
 ```python
-import sys
-sys.path.insert(0, r"C:\Users\asad\.claude\skills\arabic-pptx\scripts")
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path.home() / ".claude" / "skills" / "arabic-pptx" / "scripts"))
 from arabic_pptx import ArabicPptx, preview
 
 deck = ArabicPptx(cs_font="Arial", base_size=18)
 
-deck.title_slide("نظام كشف أمراض النبات", "مشروع تخرج")
+deck.title_slide("عنوان العرض", "سطر فرعي")
 deck.bullets_slide("المحاور", [
-    "منصة ويب مبنية على PostgreSQL و FastAPI.",
-    "النموذج MobileNetV2 بدقة 95.41%.",
+    "نقطة عربية تتضمن مصطلحات لاتينية مثل PostgreSQL و FastAPI.",
+    "أرقام الإصدارات مثل Nuxt 3 تبقى بترتيبها الصحيح.",
 ])
-deck.table_slide("التقنيات",
-    ["الطبقة", "التقنية"],          # first element = RIGHTMOST column
-    [["الواجهة الخلفية", "FastAPI"]],
+deck.table_slide("جدول",
+    ["البند", "التفصيل"],           # first element = RIGHTMOST column
+    [["الواجهة الخلفية", "FastAPI"],
+     ["قاعدة البيانات", "PostgreSQL"]],
     [10, 12])                       # column widths in cm
 
 deck.save("deck.pptx")
 preview("deck.pptx")   # converts via PowerPoint and renders PNG per slide
 ```
+
+Adjust the path if the skill lives elsewhere — nothing else in the builder
+depends on where it is installed.
 
 | Method | Purpose |
 |---|---|

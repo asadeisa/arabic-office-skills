@@ -32,11 +32,18 @@ silently and independently.
 pip install python-docx pypdfium2
 ```
 
+Writing the .docx needs nothing else. Rendering the preview needs Microsoft Word
+(any version, via COM on Windows) or LibreOffice (`soffice`, any platform) —
+whichever is present is found automatically.
+
 ## Building a document
 
+Import the builder either by copying `scripts/arabic_docx.py` next to your
+generation script, or by adding this skill's `scripts/` folder to `sys.path`:
+
 ```python
-import sys
-sys.path.insert(0, r"C:\Users\asad\.claude\skills\arabic-docx\scripts")
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path.home() / ".claude" / "skills" / "arabic-docx" / "scripts"))
 from arabic_docx import ArabicDocx, preview
 
 doc = ArabicDocx(cs_font="Arial", latin_font="Arial", size=12)
@@ -45,11 +52,12 @@ doc.title("عنوان المستند")
 doc.subtitle("سطر فرعي")
 
 doc.heading("أولاً — المقدمة")
-doc.para("نص عربي مع مصطلحات مثل PostgreSQL و FastAPI.")
+doc.para("نص عربي مع مصطلحات لاتينية مثل PostgreSQL و FastAPI.")
 
 doc.table(
     ["البند", "التفصيل"],              # first element = RIGHTMOST column
-    [["قاعدة البيانات", "PostgreSQL"]],
+    [["قاعدة البيانات", "PostgreSQL"],
+     ["الواجهة الخلفية", "FastAPI"]],
     [5, 11],                           # column widths in cm
 )
 
@@ -58,6 +66,9 @@ doc.save("report.docx")
 
 preview("report.docx")   # converts via Word and renders PNG per page
 ```
+
+Adjust the path if the skill lives elsewhere — nothing else in the builder
+depends on where it is installed.
 
 Methods chain. Cell values are passed in natural reading order — unlike the PDF
 builder, columns are **not** reversed by hand, because `w:bidiVisual` performs

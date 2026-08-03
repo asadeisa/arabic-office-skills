@@ -24,23 +24,25 @@ Verification below.
 
 ## Building a document
 
-Copy `scripts/arabic_pdf.py` next to your generation script (or add its
-directory to `sys.path`), then:
+Import the builder either by copying `scripts/arabic_pdf.py` next to your
+generation script, or by adding this skill's `scripts/` folder to `sys.path`:
 
 ```python
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path.home() / ".claude" / "skills" / "arabic-pdf" / "scripts"))
 from arabic_pdf import ArabicPDF, preview
 
-pdf = ArabicPDF("تقرير.pdf", doc_title="تقرير المشروع", page_numbers=True)
+pdf = ArabicPDF("report.pdf", doc_title="عنوان المستند", page_numbers=True)
 
-pdf.title("نظام كشف أمراض النبات")
-pdf.subtitle("ملخص الخوارزميات والتقنيات")
+pdf.title("عنوان المستند")
+pdf.subtitle("سطر فرعي")
 
-pdf.heading("أولاً — فكرة المشروع")
-pdf.para("منصة ويب يرفع المزارع من خلالها صورة، فيشخّص النظام المرض تلقائياً.")
+pdf.heading("أولاً — المقدمة")
+pdf.para("فقرة عربية تتضمن مصطلحات لاتينية مثل PostgreSQL و FastAPI.")
 
-pdf.heading("ثانياً — التقنيات")
+pdf.heading("ثانياً — جدول")
 pdf.table(
-    ["الطبقة", "التقنية"],                    # rightmost column first
+    ["البند", "التفصيل"],                     # rightmost column first
     [["الواجهة الخلفية", "Python — FastAPI"],
      ["قاعدة البيانات", "PostgreSQL — SQLAlchemy"]],
     [5.0, 11.0],                              # column widths in cm
@@ -49,8 +51,11 @@ pdf.table(
 pdf.bullets(["نقطة أولى", "نقطة ثانية"])
 pdf.save()
 
-preview("تقرير.pdf")     # one PNG per page
+preview("report.pdf")     # one PNG per page
 ```
+
+Adjust the path if the skill lives elsewhere — nothing else in the builder
+depends on where it is installed.
 
 Methods chain, so `pdf.heading(...).para(...)` also works.
 
