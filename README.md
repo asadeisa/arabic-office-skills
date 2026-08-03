@@ -9,6 +9,12 @@ table columns end up mirrored, and the space around an English term silently
 disappears. None of it shows up in extracted text, because the characters are
 all present and correct. Only their shape and placement are wrong.
 
+![The same paragraph rendered by plain reportlab and by arabic-pdf](docs/before-after.png)
+
+Same text, same font, same call. On the left the letters stand apart, the title
+reads back to front, and `Nuxt 3` has jumped out of the sentence — that is what
+plain reportlab produces, not an exaggeration of it.
+
 Each skill fixes this for one format, and each bundles a working Python library
 plus a `preview()` that renders the result to PNG so it can be checked before
 delivery.
