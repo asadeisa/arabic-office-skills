@@ -118,10 +118,19 @@ scale. Check:
 - Version numbers intact: `Nuxt 3` not `3Nuxt`
 - First table column on the **right**
 - Brackets on the correct side: `(20 فأكثر)` not `20) فأكثر(`
+- Bracket pairs intact: `DECIMAL(5,2)` not `(DECIMAL(5,2`
 - Arabic in the intended font, not a fallback
 
 None of this shows up in the file's text — the characters are all correct, only
 their placement is wrong. Only a render reveals it.
+
+`preview()` drives PowerPoint over COM through a temporary PowerShell script.
+That script is kept pure ASCII and the paths are handed over in environment
+variables, because Windows PowerShell 5.1 reads a BOM-less file as the system
+ANSI codepage — an Arabic path written into the script arrives mangled and the
+conversion fails on exactly the decks this skill exists to produce. If
+PowerPoint is present and still fails, the error it reported is raised as-is; a
+"no converter found" message means neither program was found, nothing else.
 
 ## Mixed Arabic and Latin
 
@@ -134,11 +143,51 @@ with the Arabic side unless they sit *between two Latin tokens*:
 "(20 فأكثر)"           → ["("] ["20"] [" فأكثر)"]
 ```
 
+### Bracket pairs are never split
+
+That rule alone can send the two halves of one pair into runs of opposite
+direction. PowerPoint mirrors a bracket sitting in an RTL run, so the far half
+comes back as its partner *and* at the far edge of the Latin island:
+
+| Text | Split as | Renders |
+|---|---|---|
+| `DECIMAL(5,2)` | `(` Latin, `)` Arabic | `(DECIMAL(5,2` — two opening parens |
+| `Array<String>` | `<` Latin, `>` Arabic | `<Array<String` |
+| `(API)`, `(1.25)` | both Arabic | correct — both mirror, positions swap, it cancels |
+
+So `segment()` pulls a matched pair wholly into the Latin run whenever either
+half resolved Latin, and leaves alone pairs that resolved Arabic on both sides.
+`()`, `[]`, `{}`, `<>`, `«»` are covered; a span containing Arabic is skipped so
+`a < b … c > d` stays two comparisons rather than one enormous bracket.
+
+**Any mirrored character has to share a run with its partner.** A pair split
+across a direction boundary always renders wrong.
+
 ## Typography
 
 Use Arabic punctuation in Arabic text — `،` `؛` `؟` and `«…»`. Keep Latin digits
 for version numbers, codes and URLs; `arabic_digits("38")` → `"٣٨"` is available
 when Arabic-Indic numerals suit the audience.
+
+## What makes generated Arabic read as generated
+
+Not the vocabulary — the additions. Each habit below tells the audience
+something about how the deck was written rather than about its subject, and it
+is the first thing a presenter deletes. Slides punish it doubly: there is no
+room.
+
+| Habit | Instead of | Write |
+|---|---|---|
+| Narrating the act of writing | «الشروط ثلاثة، نذكرها صراحة فيما يلي» | «الشروط ثلاثة:» |
+| Pointing at another slide | «…ونعود إلى هذه النقطة لاحقاً» | احذف العبارة |
+| Version or status labels in a title | «الخطة (النسخة الثانية — معتمدة)» | «الخطة» |
+| Arguing against an option nobody raised | «نحفظ المسار فقط. تخزين الملف كاملاً يضخّم الحجم بلا فائدة.» | «نحفظ المسار فقط.» |
+| Justifying a choice by what the brief omitted | «لم يرد ذلك في الطلب، غير أن طبيعة العمل تفرضه.» | «طبيعة العمل تفرض ذلك.» |
+| First-person singular | «وأستطيع لاحقاً تحليل الحالات» | «ويمكن لاحقاً تحليل الحالات» |
+| Restating a fact an earlier slide gave | تكرار المعلومة | احذف التكرار |
+
+Formal Arabic prefers the impersonal or the plural over «أنا»; the singular
+reads as a note to oneself rather than a presentation.
 
 ## Related
 

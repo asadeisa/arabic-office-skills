@@ -3,7 +3,7 @@
 Why this exists
 ---------------
 reportlab has no bidirectional text engine. Producing correct Arabic requires
-solving three separate problems, and getting any one of them wrong silently
+solving four separate problems, and getting any one of them wrong silently
 produces a document that *looks* plausible but reads as gibberish:
 
 1. **Glyph shaping.** Arabic letters change form depending on their neighbours.
@@ -14,7 +14,13 @@ produces a document that *looks* plausible but reads as gibberish:
    strong character, so a line starting with "PostgreSQL" is laid out
    left-to-right and every Arabic run after it lands in the wrong place.
 
-3. **Line wrapping order.** After reshaping, the string is in *visual* order.
+3. **Mirroring and Latin islands.** `python-bidi` reorders but never applies
+   rule L4, so a bracket moved to the other end of an Arabic span keeps its
+   original glyph and `(20 فأكثر)` prints as `)20 فأكثر(`. And `<`/`>` are not
+   Unicode *paired brackets*, so the algorithm's bracket rule does not hold
+   `Array<String>` together. `prepare()` handles both.
+
+4. **Line wrapping order.** After reshaping, the string is in *visual* order.
    If reportlab wraps it, it moves what it thinks are trailing words to the
    next line — but in visual order those are the *leading* words, so lines come
    out shuffled. The fix is to wrap manually before reshaping, reshape each
@@ -40,6 +46,7 @@ Usage
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import arabic_reshaper
@@ -110,13 +117,114 @@ def register_fonts(regular: str | None = None, bold: str | None = None) -> tuple
 # Text shaping
 # --------------------------------------------------------------------------
 
+ARABIC_RE = re.compile(
+    r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]"
+)
+LATIN_RE = re.compile(r"[A-Za-z0-9]")
+
+# Mirrored characters and their partners, for rule L4 below.
+BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">", "«": "»", "‹": "›",
+            "〈": "〉", "⟨": "⟩"}
+CLOSERS = {close: open_ for open_, close in BRACKETS.items()}
+MIRROR = str.maketrans({**BRACKETS, **CLOSERS})
+
+LRI, PDI = "⁦", "⁩"   # left-to-right isolate / pop directional isolate
+
+
+def _bracket_pairs(text: str) -> list[tuple[int, int]]:
+    """Return (open_index, close_index) for every matched mirrored pair."""
+    stack: list[tuple[str, int]] = []
+    pairs: list[tuple[int, int]] = []
+    for i, ch in enumerate(text):
+        if ch in BRACKETS:
+            stack.append((ch, i))
+        elif ch in CLOSERS:
+            for k in range(len(stack) - 1, -1, -1):
+                if stack[k][0] == CLOSERS[ch]:
+                    pairs.append((stack[k][1], i))
+                    del stack[k:]
+                    break
+    return pairs
+
+
+def prepare(text: str) -> str:
+    """Mirror right-to-left brackets and fence off the Latin spans.
+
+    Two repairs `get_display` does not make on its own:
+
+    * **Rule L4 — mirroring.** python-bidi reorders but never swaps a mirrored
+      character for its partner, so `(20 فأكثر)` comes back with the parens in
+      exchanged positions and their original glyphs, and renders `)20 فأكثر(`.
+      Substituting here puts the right glyph where the reorder will move it.
+    * **Latin islands.** `<` and `>` are mirrored but are not Unicode *paired
+      brackets*, so the algorithm's bracket rule — the one that keeps
+      `DECIMAL(5,2)` intact — does not cover them. The `>` of `Array<String>`
+      simply takes the direction of the Arabic after it and is thrown to the
+      far side. Wrapping each Latin span in LRI…PDI makes it one left-to-right
+      island, which is the same thing a run boundary buys in Word.
+
+    A bracket is right-to-left unless it sits between two Latin tokens, and a
+    matched pair takes a side together — otherwise `DECIMAL(5,2)`, whose inner
+    paren is Latin and whose trailing one is not, would be half-mirrored.
+    """
+    if not text:
+        return text
+
+    def classify(ch):
+        if ARABIC_RE.match(ch):
+            return "A"
+        return "L" if LATIN_RE.match(ch) else "N"
+
+    kinds = [classify(ch) for ch in text]
+    n = len(kinds)
+
+    prev_strong, last = [None] * n, None
+    for i, k in enumerate(kinds):
+        prev_strong[i] = last
+        if k != "N":
+            last = k
+    next_strong, nxt = [None] * n, None
+    for i in range(n - 1, -1, -1):
+        next_strong[i] = nxt
+        if kinds[i] != "N":
+            nxt = kinds[i]
+
+    resolved = [
+        k if k != "N"
+        else ("L" if prev_strong[i] == "L" and next_strong[i] == "L" else "A")
+        for i, k in enumerate(kinds)
+    ]
+    for i, j in _bracket_pairs(text):
+        if (resolved[i] == "L" or resolved[j] == "L") and "A" not in kinds[i:j + 1]:
+            resolved[i:j + 1] = ["L"] * (j - i + 1)
+
+    out = []
+    for i, ch in enumerate(text):
+        if resolved[i] == "A":
+            out.append(ch.translate(MIRROR))
+            continue
+        if i == 0 or resolved[i - 1] != "L":
+            out.append(LRI)
+        out.append(ch)
+        if i == n - 1 or resolved[i + 1] != "L":
+            out.append(PDI)
+    return "".join(out)
+
+
 def shape(text: str) -> str:
     """Reshape Arabic glyphs and reorder to visual RTL order.
 
     base_dir="R" is not optional: without it a line beginning with a Latin word
     is treated as left-to-right and the Arabic that follows is misplaced.
+
+    Reshaping runs *first* so the isolates are never inserted between two
+    Arabic letters, where they would break the joining. The isolates are then
+    dropped once the reorder has used them, so no invisible control character
+    reaches the PDF — some fonts draw those as empty boxes. Removing them
+    cannot disturb the order of what is left.
     """
-    return get_display(arabic_reshaper.reshape(text), base_dir="R")
+    visual = get_display(prepare(arabic_reshaper.reshape(text)), base_dir="R")
+    return visual.replace(LRI, "").replace(PDI, "")
 
 
 ARABIC_DIGITS = str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩")
@@ -125,6 +233,17 @@ ARABIC_DIGITS = str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩")
 def arabic_digits(text: str) -> str:
     """Convert Western digits to Arabic-Indic. Purely cosmetic."""
     return text.translate(ARABIC_DIGITS)
+
+
+def _escape(text: str) -> str:
+    """Escape for reportlab's mini-XML — *after* shaping, never before.
+
+    Escaping first sends `&lt;` through the bidi pass as four separate
+    characters. Its trailing `;` is a neutral, so it resolves to the
+    surrounding Arabic and is ejected to the far side of the Latin island:
+    `Array<String>` renders as `Array<String> ;`.
+    """
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _wrap(text: str, style: ParagraphStyle, max_width: float) -> str:
@@ -147,8 +266,7 @@ def _wrap(text: str, style: ParagraphStyle, max_width: float) -> str:
                 lines.append(" ".join(cur))
                 cur = [word]
         lines.append(" ".join(cur))
-    safe = (l.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") for l in lines)
-    return "<br/>".join(shape(l) for l in safe)
+    return "<br/>".join(_escape(shape(l)) for l in lines)
 
 
 def rtl_paragraph(text: str, style: ParagraphStyle, max_width: float) -> Paragraph:

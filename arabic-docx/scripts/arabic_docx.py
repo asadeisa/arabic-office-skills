@@ -72,6 +72,12 @@ ARABIC_RE = re.compile(
 LATIN_RE = re.compile(r"[A-Za-z0-9]")
 ARABIC_INDIC = str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩")
 
+# Mirrored characters: rendered flipped when they land in a right-to-left run.
+# Both halves of a pair therefore have to share one run — see segment().
+BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">", "«": "»", "‹": "›",
+            "〈": "〉", "⟨": "⟩"}
+CLOSERS = {close: open_ for open_, close in BRACKETS.items()}
+
 
 # --------------------------------------------------------------------------
 # Low-level XML helpers
@@ -94,6 +100,21 @@ def _flag(parent, tag, val=None):
     return el
 
 
+def _bracket_pairs(text):
+    """Return (open_index, close_index) for every matched mirrored pair."""
+    stack, pairs = [], []
+    for i, ch in enumerate(text):
+        if ch in BRACKETS:
+            stack.append((ch, i))
+        elif ch in CLOSERS:
+            for k in range(len(stack) - 1, -1, -1):
+                if stack[k][0] == CLOSERS[ch]:
+                    pairs.append((stack[k][1], i))
+                    del stack[k:]
+                    break
+    return pairs
+
+
 def segment(text):
     """Split text into (chunk, is_arabic) pieces.
 
@@ -108,8 +129,18 @@ def segment(text):
       "Vue.js 3 مع Nuxt 3."  → ["Vue.js 3"] [" مع "] ["Nuxt 3"] ["."]
       "(20 فأكثر)"           → ["("] ["20"] [" فأكثر)"]
 
-    Word still runs its own bidi pass over the result; the job here is only to
-    give every run a base direction matching the strong characters inside it.
+    That rule alone splits bracket pairs, which is a second, worse defect. In
+    `DECIMAL(5,2)` the inner `(` sits between two Latin tokens and stays Latin,
+    while the trailing `)` has Arabic after it and goes to the Arabic run —
+    where Word mirrors it into `(` and moves it to the far edge of the Latin
+    island, rendering `(DECIMAL(5,2`. So a matched pair is forced into one run
+    whenever either half resolved Latin.
+
+    `(API)` and `(1.25)` need no such repair and must not get it: there both
+    brackets resolve Arabic, both are mirrored, and their positions swap, which
+    cancels out. Only pairs that are actually split are touched. The span is
+    left alone if it contains Arabic — that means an unpaired `<`/`>` used as a
+    comparison operator, not a bracket.
     """
     if not text:
         return []
@@ -139,6 +170,10 @@ def segment(text):
         else ("L" if prev_strong[i] == "L" and next_strong[i] == "L" else "A")
         for i, k in enumerate(kinds)
     ]
+
+    for i, j in _bracket_pairs(text):
+        if (resolved[i] == "L" or resolved[j] == "L") and "A" not in kinds[i:j + 1]:
+            resolved[i:j + 1] = ["L"] * (j - i + 1)
 
     out, buf, cur = [], text[0], resolved[0]
     for ch, k in zip(text[1:], resolved[1:]):
@@ -352,6 +387,62 @@ NO_CONVERTER = (
     "is already written; only the visual check needs a converter."
 )
 
+WORD_FAILED = (
+    "Microsoft Word was found but failed to convert the document, and there is "
+    "no LibreOffice install to fall back to. Word reported:\n{}"
+)
+
+# Pure ASCII, and paths arrive through the environment rather than being
+# interpolated in. Windows PowerShell 5.1 reads a BOM-less script as the system
+# ANSI codepage, so an Arabic path baked into the text comes out mangled, Word
+# cannot find the file, and the conversion fails for every Arabic-named
+# document — which is most of them. Environment variables are passed as
+# Unicode, so the script never has to carry a non-ASCII character.
+WORD_SCRIPT = r'''
+$ErrorActionPreference = "Stop"
+$src = $env:ARABIC_DOCX_SRC
+$pdf = $env:ARABIC_DOCX_PDF
+$word = New-Object -ComObject Word.Application
+$word.Visible = $false
+try {
+    $doc = $word.Documents.Open($src, $false, $true)
+    $doc.SaveAs([ref]$pdf, [ref]17)    # 17 = wdFormatPDF
+    $doc.Close([ref]0)
+} finally {
+    $word.Quit()
+}
+'''
+
+
+def _console_text(raw):
+    """Decode PowerShell output, which is console-codepage bytes, not UTF-8."""
+    for enc in ("utf-8", "cp1252", "latin-1"):
+        try:
+            return raw.decode(enc).strip()
+        except UnicodeDecodeError:
+            continue
+    return repr(raw)
+
+
+def _word_to_pdf(docx_path, pdf_path):
+    """Drive Word through COM. Returns None on success, else the failure text."""
+    with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False,
+                                     encoding="utf-8-sig") as fh:
+        fh.write(WORD_SCRIPT)
+        ps = fh.name
+    env = dict(os.environ, ARABIC_DOCX_SRC=str(docx_path),
+               ARABIC_DOCX_PDF=str(pdf_path))
+    try:
+        proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive",
+                               "-ExecutionPolicy", "Bypass", "-File", ps],
+                              capture_output=True, env=env)
+    finally:
+        Path(ps).unlink(missing_ok=True)
+    if proc.returncode == 0 and Path(pdf_path).exists():
+        return None
+    return (_console_text(proc.stderr) or _console_text(proc.stdout)
+            or f"powershell exited with {proc.returncode} and wrote no PDF")
+
 
 def docx_to_pdf(docx_path, pdf_path=None):
     """Convert via Word or LibreOffice so the result can be rendered and viewed.
@@ -359,43 +450,36 @@ def docx_to_pdf(docx_path, pdf_path=None):
     Arabic defects do not show up in the document's own text — the characters
     are all present and correct, only their shaping and order are wrong. Only a
     render reveals them, so convert and look before delivering.
+
+    A Word failure is carried, not swallowed. Reporting "no converter found"
+    when Word is installed and merely errored sends the caller off installing
+    LibreOffice for a problem that has nothing to do with LibreOffice.
     """
     docx_path = Path(docx_path).resolve()
     pdf_path = Path(pdf_path).resolve() if pdf_path else docx_path.with_suffix(".pdf")
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
 
+    word_error = None
     if find_word():
-        script = f'''
-$ErrorActionPreference = "Stop"
-$word = New-Object -ComObject Word.Application
-$word.Visible = $false
-$doc = $word.Documents.Open("{docx_path}", $false, $true)
-$doc.SaveAs([ref]"{pdf_path}", [ref]17)
-$doc.Close([ref]0)
-$word.Quit()
-'''
-        with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False,
-                                         encoding="utf-8") as fh:
-            fh.write(script)
-            ps = fh.name
-        try:
-            subprocess.run(["powershell", "-NoProfile", "-NonInteractive",
-                            "-ExecutionPolicy", "Bypass", "-File", ps],
-                           check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            pass          # Word may be busy or unlicensed; try LibreOffice below
-        finally:
-            Path(ps).unlink(missing_ok=True)
-        if pdf_path.exists():
+        word_error = _word_to_pdf(docx_path, pdf_path)
+        if word_error is None:
             return str(pdf_path)
 
     soffice = find_soffice()
     if not soffice:
-        raise RuntimeError(NO_CONVERTER)
+        raise RuntimeError(WORD_FAILED.format(word_error) if word_error
+                           else NO_CONVERTER)
 
-    subprocess.run([soffice, "--headless", "--convert-to", "pdf",
-                    "--outdir", str(pdf_path.parent), str(docx_path)],
-                   check=True, capture_output=True)
+    try:
+        subprocess.run([soffice, "--headless", "--convert-to", "pdf",
+                        "--outdir", str(pdf_path.parent), str(docx_path)],
+                       check=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        detail = _console_text(exc.stderr) or _console_text(exc.stdout)
+        raise RuntimeError(
+            f"LibreOffice failed to convert {docx_path.name}: {detail}"
+            + (f"\nWord was tried first and failed: {word_error}" if word_error else "")
+        ) from exc
     # LibreOffice names the output after the *source* file, ignoring pdf_path.
     produced = pdf_path.parent / f"{docx_path.stem}.pdf"
     if produced != pdf_path and produced.exists():

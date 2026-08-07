@@ -101,6 +101,15 @@ all correct, only their placement is wrong. Check:
 - Is Arabic rendered in the intended font and size, or has it fallen back?
 - Do brackets and punctuation sit on the correct side — `(20 فأكثر)` not
   `20) فأكثر(`?
+- Is every bracket pair intact — `DECIMAL(5,2)` not `(DECIMAL(5,2`?
+
+`preview()` drives Word over COM through a temporary PowerShell script. That
+script is kept pure ASCII and the paths are handed over in environment
+variables, because Windows PowerShell 5.1 reads a BOM-less file as the system
+ANSI codepage — an Arabic path written into the script arrives mangled and the
+conversion fails on exactly the documents this skill exists to produce. If Word
+is present and still fails, the error it reported is raised as-is; a "no
+converter found" message means neither program was found, nothing else.
 
 ## What the builder sets, and why each matters
 
@@ -137,6 +146,28 @@ Attaching a boundary space to the Latin run instead is what produces
 `PostgreSQLو` with the space visually swallowed — a defect that survived the
 first build of this skill and was only caught by rendering the page.
 
+### Bracket pairs are never split
+
+That rule alone is not enough, because it can send the two halves of one pair
+into runs of opposite direction. Word mirrors a bracket that sits in an RTL
+run, so the far half comes back as its partner *and* at the far edge of the
+Latin island:
+
+| Text | Split as | Renders |
+|---|---|---|
+| `DECIMAL(5,2)` | `(` Latin, `)` Arabic | `(DECIMAL(5,2` — two opening parens |
+| `Array<String>` | `<` Latin, `>` Arabic | `<Array<String` |
+| `(API)`, `(1.25)` | both Arabic | correct — both mirror, positions swap, it cancels |
+
+So `segment()` pulls a matched pair wholly into the Latin run whenever either
+half resolved Latin, and leaves alone the pairs that resolved Arabic on both
+sides. `()`, `[]`, `{}`, `<>`, `«»` are covered. A span containing Arabic is
+skipped, so `a < b … c > d` stays two separate comparisons rather than one
+enormous bracket.
+
+The lesson generalises: **any mirrored character has to share a run with its
+partner.** A pair split across a direction boundary always renders wrong.
+
 ## Fonts
 
 Word keeps three font slots per run. Arabic is drawn from the **complex-script**
@@ -156,6 +187,26 @@ Arabic and Sakkal Majalla (formal documents), Amiri (academic). Pass via
 Use Arabic punctuation in Arabic text — `،` (U+060C), `؛` (U+061B), `؟`
 (U+061F), and `«…»` for quotes. Latin `,;?` inside an Arabic run reads as
 careless and can sit on the wrong side.
+
+## What makes generated Arabic read as generated
+
+Not the vocabulary — the additions. Each habit below tells the reader something
+about how the document was written rather than about its subject, and a reader
+editing by hand deletes all of them. Write the sentence, not the account of
+writing it.
+
+| Habit | Instead of | Write |
+|---|---|---|
+| Narrating the act of writing | «الشروط ثلاثة، نذكرها صراحة فيما يلي» | «الشروط ثلاثة:» |
+| Pointing at another section | «…ونعود إلى هذه النقطة لاحقاً» | احذف العبارة |
+| Version or status labels in a title | «الخطة (النسخة الثانية — معتمدة)» | «الخطة» |
+| Arguing against an option nobody raised | «نحفظ المسار فقط. تخزين الملف كاملاً يضخّم الحجم بلا فائدة.» | «نحفظ المسار فقط.» |
+| Justifying a choice by what the brief omitted | «لم يرد ذلك في الطلب، غير أن طبيعة العمل تفرضه.» | «طبيعة العمل تفرض ذلك.» |
+| First-person singular | «وأستطيع لاحقاً تحليل الحالات» | «ويمكن لاحقاً تحليل الحالات» |
+| Restating a fact the document already gave | تكرار المعلومة في قسم آخر | احذف التكرار |
+
+Formal Arabic prefers the impersonal or the plural over «أنا»; the singular
+reads as a note to oneself rather than a document.
 
 ## Related
 

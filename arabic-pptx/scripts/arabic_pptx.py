@@ -49,13 +49,41 @@ ARABIC_RE = re.compile(
 LATIN_RE = re.compile(r"[A-Za-z0-9]")
 ARABIC_INDIC = str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩")
 
+# Mirrored characters: rendered flipped when they land in a right-to-left run,
+# so both halves of a pair have to share one run — see segment().
+BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">", "«": "»", "‹": "›",
+            "〈": "〉", "⟨": "⟩"}
+CLOSERS = {close: open_ for open_, close in BRACKETS.items()}
+
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
+
+
+def _bracket_pairs(text):
+    """Return (open_index, close_index) for every matched mirrored pair."""
+    stack, pairs = [], []
+    for i, ch in enumerate(text):
+        if ch in BRACKETS:
+            stack.append((ch, i))
+        elif ch in CLOSERS:
+            for k in range(len(stack) - 1, -1, -1):
+                if stack[k][0] == CLOSERS[ch]:
+                    pairs.append((stack[k][1], i))
+                    del stack[k:]
+                    break
+    return pairs
 
 
 def segment(text):
     """Split into (chunk, is_arabic). Neutrals join the Arabic side unless they
     sit between two Latin tokens — see arabic-docx for the full reasoning.
+
+    A matched bracket pair is then pulled wholly into the Latin run whenever
+    either half resolved Latin. Otherwise `DECIMAL(5,2)` splits: the inner `(`
+    stays Latin while the trailing `)` joins the Arabic run, where PowerPoint
+    mirrors it and moves it to the far edge, rendering `(DECIMAL(5,2`. Pairs
+    that resolved Arabic on both sides — `(API)`, `(1.25)` — are left alone;
+    there both are mirrored and their positions swap, which cancels out.
     """
     if not text:
         return []
@@ -84,6 +112,12 @@ def segment(text):
         else ("L" if prev_strong[i] == "L" and next_strong[i] == "L" else "A")
         for i, k in enumerate(kinds)
     ]
+
+    # Skip the span if it contains Arabic — that is an unpaired `<`/`>` used as
+    # a comparison operator, not a bracket.
+    for i, j in _bracket_pairs(text):
+        if (resolved[i] == "L" or resolved[j] == "L") and "A" not in kinds[i:j + 1]:
+            resolved[i:j + 1] = ["L"] * (j - i + 1)
 
     out, buf, cur = [], text[0], resolved[0]
     for ch, k in zip(text[1:], resolved[1:]):
@@ -306,43 +340,94 @@ NO_CONVERTER = (
 )
 
 
+PPT_FAILED = (
+    "Microsoft PowerPoint was found but failed to convert the deck, and there "
+    "is no LibreOffice install to fall back to. PowerPoint reported:\n{}"
+)
+
+# Pure ASCII, and paths arrive through the environment rather than being
+# interpolated in. Windows PowerShell 5.1 reads a BOM-less script as the system
+# ANSI codepage, so an Arabic path baked into the text comes out mangled,
+# PowerPoint cannot find the file, and the conversion fails for every
+# Arabic-named deck. Environment variables are passed as Unicode, so the script
+# never has to carry a non-ASCII character.
+PPT_SCRIPT = r'''
+$ErrorActionPreference = "Stop"
+$src = $env:ARABIC_PPTX_SRC
+$pdf = $env:ARABIC_PPTX_PDF
+$app = New-Object -ComObject PowerPoint.Application
+try {
+    $pres = $app.Presentations.Open($src, $true, $false, $false)
+    $pres.SaveAs($pdf, 32)    # 32 = ppSaveAsPDF
+    $pres.Close()
+} finally {
+    $app.Quit()
+}
+'''
+
+
+def _console_text(raw):
+    """Decode PowerShell output, which is console-codepage bytes, not UTF-8."""
+    for enc in ("utf-8", "cp1252", "latin-1"):
+        try:
+            return raw.decode(enc).strip()
+        except UnicodeDecodeError:
+            continue
+    return repr(raw)
+
+
+def _ppt_to_pdf(pptx_path, pdf_path):
+    """Drive PowerPoint through COM. None on success, else the failure text."""
+    with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False,
+                                     encoding="utf-8-sig") as fh:
+        fh.write(PPT_SCRIPT)
+        ps = fh.name
+    env = dict(os.environ, ARABIC_PPTX_SRC=str(pptx_path),
+               ARABIC_PPTX_PDF=str(pdf_path))
+    try:
+        proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive",
+                               "-ExecutionPolicy", "Bypass", "-File", ps],
+                              capture_output=True, env=env)
+    finally:
+        Path(ps).unlink(missing_ok=True)
+    if proc.returncode == 0 and Path(pdf_path).exists():
+        return None
+    return (_console_text(proc.stderr) or _console_text(proc.stdout)
+            or f"powershell exited with {proc.returncode} and wrote no PDF")
+
+
 def pptx_to_pdf(pptx_path, pdf_path=None):
-    """Convert through PowerPoint (or LibreOffice) so slides can be rendered."""
+    """Convert through PowerPoint (or LibreOffice) so slides can be rendered.
+
+    A PowerPoint failure is carried, not swallowed. Reporting "no converter
+    found" when PowerPoint is installed and merely errored sends the caller off
+    installing LibreOffice for a problem that has nothing to do with it.
+    """
     pptx_path = Path(pptx_path).resolve()
     pdf_path = Path(pdf_path).resolve() if pdf_path else pptx_path.with_suffix(".pdf")
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
 
+    ppt_error = None
     if find_powerpoint():
-        script = f'''
-$ErrorActionPreference = "Stop"
-$app = New-Object -ComObject PowerPoint.Application
-$pres = $app.Presentations.Open("{pptx_path}", $true, $false, $false)
-$pres.SaveAs("{pdf_path}", 32)
-$pres.Close()
-$app.Quit()
-'''
-        with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False,
-                                         encoding="utf-8") as fh:
-            fh.write(script)
-            ps = fh.name
-        try:
-            subprocess.run(["powershell", "-NoProfile", "-NonInteractive",
-                            "-ExecutionPolicy", "Bypass", "-File", ps],
-                           check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            pass          # PowerPoint may be busy or unlicensed; fall back below
-        finally:
-            Path(ps).unlink(missing_ok=True)
-        if pdf_path.exists():
+        ppt_error = _ppt_to_pdf(pptx_path, pdf_path)
+        if ppt_error is None:
             return str(pdf_path)
 
     soffice = find_soffice()
     if not soffice:
-        raise RuntimeError(NO_CONVERTER)
+        raise RuntimeError(PPT_FAILED.format(ppt_error) if ppt_error
+                           else NO_CONVERTER)
 
-    subprocess.run([soffice, "--headless", "--convert-to", "pdf",
-                    "--outdir", str(pdf_path.parent), str(pptx_path)],
-                   check=True, capture_output=True)
+    try:
+        subprocess.run([soffice, "--headless", "--convert-to", "pdf",
+                        "--outdir", str(pdf_path.parent), str(pptx_path)],
+                       check=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        detail = _console_text(exc.stderr) or _console_text(exc.stdout)
+        raise RuntimeError(
+            f"LibreOffice failed to convert {pptx_path.name}: {detail}"
+            + (f"\nPowerPoint was tried first and failed: {ppt_error}" if ppt_error else "")
+        ) from exc
     # LibreOffice names the output after the *source* file, ignoring pdf_path.
     produced = pdf_path.parent / f"{pptx_path.stem}.pdf"
     if produced != pdf_path and produced.exists():
