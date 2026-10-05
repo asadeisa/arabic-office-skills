@@ -8,3 +8,7 @@ __pycache__/
 
 # generated documents and previews are throwaway; README artwork is not
 !docs/*.png
+
+# local test output
+tests/out/
+.pytest_cache/

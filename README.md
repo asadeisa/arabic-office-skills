@@ -30,7 +30,7 @@ delivery.
 These three formats need **opposite** techniques, and the most common way to
 break Arabic output is to carry the right fix into the wrong format.
 
-| | reportlab / Pillow | Word / PowerPoint |
+| | reportlab (and Pillow without libraqm) | Word / PowerPoint (and Pillow with libraqm) |
 |---|---|---|
 | Text engine | **none** | full bidirectional engine |
 | Expects | final visual-order glyphs | **raw logical-order Unicode** |
@@ -52,6 +52,26 @@ expose, so the bundled scripts write them into the XML directly:
 Each flag fails silently and independently. Missing `lang` on a PowerPoint run
 turns `PostgreSQL و` into `PostgreSQLو`; putting it on the whole paragraph
 instead turns `Nuxt 3` into `3Nuxt`.
+
+## Beyond direction flags
+
+Correct direction flags are necessary, not sufficient. These were each found in
+real Arabic reports and defense decks, and each is handled by the libraries:
+
+| Defect | Where | What the skills do |
+|---|---|---|
+| Arabic in a bold run stays regular; Arabic headings come out smaller | Word | bold, italic and size written to the complex-script slots (`w:bCs`, `w:iCs`, `w:szCs`), in runs and in every style |
+| TOC, captions and headings render Arabic in Calibri Light | Word | theme font references stripped from styles |
+| `WD_ALIGN_PARAGRAPH.RIGHT` aligns an Arabic paragraph to the **left** | Word | alignment written as `start`/`end` only |
+| `C#` → `#C`, `.NET` → `NET.`, `+963` → `963+` | all | flush affixes kept with their token |
+| Steps and numbered cards run 01 → 04 from the left | PowerPoint | `rtl_positions()`, `steps_slide()` |
+| Fly-in and wipe animations enter from the left | PowerPoint | fade transitions and builds, in RTL reading order |
+| Text typed later into the deck starts on the left | PowerPoint | presentation and master defaults made RTL |
+| A user's hand edits lost when the document is regenerated | Word | `insert_before()` edits in place |
+
+And both Office libraries can **audit** and **repair** files made elsewhere:
+`audit_docx` / `audit_pptx` list what a reader would see wrong,
+`fix_docx` / `fix_pptx` retrofit the flags onto the existing structure.
 
 ## Install
 
@@ -91,8 +111,21 @@ pdf.save()
 preview("تقرير.pdf")
 ```
 
-`ArabicDocx` and `ArabicPptx` follow the same shape. Each `SKILL.md` documents
-its own API, the XML it sets, and what to look for when checking the output.
+`ArabicDocx` and `ArabicPptx` follow the same shape, with more for long
+documents and talks — headings on real styles, a table of contents, numbered
+captions, page numbers; RTL step layouts, transitions and click-by-click
+builds. Each `SKILL.md` documents its own API, the XML it sets, and what to
+look for when checking the output.
+
+Checking a file someone else made:
+
+```python
+from arabic_docx import audit_docx, fix_docx
+
+for finding in audit_docx("report.docx"):
+    print(finding)
+fix_docx("report.docx", "report-fixed.docx")
+```
 
 ## Scripts
 
@@ -102,6 +135,18 @@ cover the script; for PowerPoint pass the language too:
 ```python
 ArabicPptx(rtl_lang="fa-IR")   # also ur-PK, he-IL
 ```
+
+## Tests
+
+```bash
+pip install pytest python-docx python-pptx reportlab arabic-reshaper python-bidi
+pytest tests
+```
+
+The unit tests check the XML. What a reader sees can only be checked by
+rendering: `python tests/render_check.py` builds sample files, audits them and
+renders them through the installed Word and PowerPoint (or LibreOffice) to
+`tests/out/`. Look at the PNGs before a release.
 
 ## License
 

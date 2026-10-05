@@ -1,6 +1,6 @@
 ---
 name: arabic-pptx
-description: Generate PowerPoint (.pptx) presentations in Arabic or any right-to-left script (Persian, Urdu, Hebrew) with correct paragraph direction, RTL tables, complex-script fonts, and properly spaced mixed Arabic/Latin text. Use this skill whenever the user asks for slides, a deck, a presentation, a pitch, a defense talk, or any .pptx whose content is Arabic or mixes Arabic with Latin technical terms — even if they never say "RTL". Also use it when an existing deck shows Arabic drifting to the left, table columns in the wrong order, version numbers like "Nuxt 3" reversed, or spaces missing around English words.
+description: Generate PowerPoint (.pptx) presentations in Arabic or any right-to-left script (Persian, Urdu, Hebrew) with correct paragraph direction, RTL tables, complex-script fonts, and properly spaced mixed Arabic/Latin text. Use this skill whenever the user asks for slides, a deck, a presentation, a pitch, a defense talk, or any .pptx whose content is Arabic or mixes Arabic with Latin technical terms — even if they never say "RTL". Also use it when an existing deck shows Arabic drifting to the left, table columns in the wrong order, version numbers like "Nuxt 3" reversed, or spaces missing around English words — it can audit and repair existing decks and lays out numbered steps right to left.
 ---
 
 # Arabic / RTL PowerPoint decks
@@ -35,22 +35,29 @@ generation script, or by adding this skill's `scripts/` folder to `sys.path`:
 ```python
 import pathlib, sys
 sys.path.insert(0, str(pathlib.Path.home() / ".claude" / "skills" / "arabic-pptx" / "scripts"))
-from arabic_pptx import ArabicPptx, preview
+from arabic_pptx import ArabicPptx, preview, audit_pptx
 
-deck = ArabicPptx(cs_font="Arial", base_size=18)
+deck = ArabicPptx(cs_font="Arial", base_size=24)
 
 deck.title_slide("عنوان العرض", "سطر فرعي")
 deck.bullets_slide("المحاور", [
     "نقطة عربية تتضمن مصطلحات لاتينية مثل PostgreSQL و FastAPI.",
     "أرقام الإصدارات مثل Nuxt 3 تبقى بترتيبها الصحيح.",
 ])
+deck.steps_slide("مراحل العمل", [
+    ("جمع البيانات", "السجلات والوصفات"),
+    ("التحليل", "مطابقة القواعد"),
+    ("التنبيه", "إشعار الطبيب"),
+])                                  # 01 on the right, joined by ← arrows
 deck.table_slide("جدول",
     ["البند", "التفصيل"],           # first element = RIGHTMOST column
     [["الواجهة الخلفية", "FastAPI"],
      ["قاعدة البيانات", "PostgreSQL"]],
     [10, 12])                       # column widths in cm
+deck.image_slide("البنية", "diagram.png", caption="الشكل 1: بنية النظام")
 
 deck.save("deck.pptx")
+assert audit_pptx("deck.pptx") == []
 preview("deck.pptx")   # converts via PowerPoint and renders PNG per slide
 ```
 
@@ -60,10 +67,18 @@ depends on where it is installed.
 | Method | Purpose |
 |---|---|
 | `title_slide(title, subtitle)` | Centred opening slide |
-| `bullets_slide(title, items, marker="•")` | Heading plus bulleted list |
+| `bullets_slide(title, items, marker="•")` | Heading plus a real bulleted list (`a:buChar`, hanging indent on the right) |
 | `text_slide(title, paragraphs)` | Heading plus body paragraphs |
+| `steps_slide(title, steps)` | 2–5 numbered cards, 01 on the right, joined by ← arrows |
 | `table_slide(title, header, rows, widths_cm)` | Heading plus RTL table |
+| `image_slide(title, path, caption=None)` | Heading plus a picture fitted to the body area |
 | `save(path)` | Writes the file |
+
+Module functions: `audit_pptx(path)`, `fix_pptx(src, dst)`,
+`rtl_positions(n, left, width, item_width, gap)`, `reading_order(shapes)`,
+`make_rtl_defaults(prs)`, `preview(path)`, `segment(text)`, `arabic_digits(text)`.
+Optional animation helpers are described under "Optional: if the deck is
+animated".
 
 Columns are passed in natural reading order — `rtl="1"` on `<a:tblPr>` performs
 the flip inside PowerPoint, so no manual reversal (unlike the PDF builder).
@@ -102,9 +117,53 @@ For other scripts pass `ArabicPptx(rtl_lang="fa-IR")` — also `ur-PK`, `he-IL`.
 | `<a:rPr>` | child `<a:cs typeface="…"/>` | Arabic ignores the font entirely |
 | `<a:tblPr>` | `rtl="1"` | First column renders on the left |
 | `<a:t>` | `xml:space="preserve"` | OOXML strips leading/trailing whitespace |
+| `<a:endParaRPr>` | `lang` + `a:cs` | Text the presenter types at the end of a line comes in as English |
+| `<a:pPr>` | `marL` + `indent` + `a:buChar` | Bullets typed as text: wrapped lines start under the bullet |
+| `p:defaultTextStyle`, master `p:txStyles` | `rtl="1"`, `algn="r"` | New text boxes added in PowerPoint start on the left |
 
 Note `<a:cs>` is a **child element**, not an attribute — setting `font.name`
 only fills the Latin slot and leaves Arabic on a fallback face.
+
+## Layout runs right to left too
+
+Direction flags fix text inside a box; they do nothing for the *order of the
+boxes*. Numbered cards, process steps, timelines and phase diagrams laid out
+with `x = left + i * step` read backwards in Arabic — 01 on the left — and no
+text setting can repair that. It is the most common defect in otherwise
+correct Arabic decks.
+
+- `rtl_positions(n, left, width, item_width, gap)` returns x offsets with item
+  0 on the right; `steps_slide()` uses it.
+- `reading_order(shapes)` sorts existing shapes top band first, then right to
+  left — the order to reveal them in.
+- Arrows are characters, and bidi does not mirror them: a right-to-left flow
+  needs `←`. A `→` typed in an RTL deck still points right, i.e. backwards.
+
+## Readability
+
+The audit flags text below 18 pt. That is a floor, not a target: in a hall,
+titles read at 40 pt and up and list text at 24 pt and up. `base_size=24` is
+a better start for a talk than the default 18. Long titles shrink to fit one
+line (down to `base_size + 4`) before they wrap. Units: `a:rPr@sz` is in
+hundredths of a point (`sz="2400"` = 24 pt); some toolkits take pixels
+(1 px = 0.75 pt) — check before trusting a number.
+
+## Fixing and auditing existing decks
+
+`audit_pptx(path)` lists what a viewer would see wrong: Arabic paragraphs that
+are not RTL (resolved through the inheritance chain — slide, shape list
+style, master text styles, presentation defaults), Latin-only paragraphs
+marked RTL whose edge punctuation jumps, mixed-script runs, Arabic runs
+tagged `en-*`, tables with Arabic but no `rtl="1"`, pre-shaped presentation
+forms, and small text.
+
+`fix_pptx(src, dst)` repairs those in place, keeping positions and formatting:
+`rtl="1"` on Arabic paragraphs (alignment changed only where it was left or
+unset, so centred titles stay centred), mixed runs split with a `lang` each,
+`a:cs` added where a Latin font is named, and the presentation and master
+defaults made RTL so text typed later starts on the right. `tables=True`
+also flips tables — off by default, since it reverses column order. Layout
+order (cards, steps) is not changed: check those slides by eye.
 
 ## Verification — convert and look
 
@@ -119,7 +178,13 @@ scale. Check:
 - First table column on the **right**
 - Brackets on the correct side: `(20 فأكثر)` not `20) فأكثر(`
 - Bracket pairs intact: `DECIMAL(5,2)` not `(DECIMAL(5,2`
+- `C#`, `C++`, `.NET`, `+963` intact — not `#C`, `NET.`, `963+`
 - Arabic in the intended font, not a fallback
+- Numbered items and steps start on the **right**; arrows point left
+
+LibreOffice ignores `rtl="1"` on tables, so its previews show the first column
+on the left even when PowerPoint shows it correctly on the right. Judge table
+column order in PowerPoint.
 
 None of this shows up in the file's text — the characters are all correct, only
 their placement is wrong. Only a render reveals it.
@@ -141,7 +206,14 @@ with the Arabic side unless they sit *between two Latin tokens*:
 ```
 "Vue.js 3 مع Nuxt 3."  → ["Vue.js 3"] [" مع "] ["Nuxt 3"] ["."]
 "(20 فأكثر)"           → ["("] ["20"] [" فأكثر)"]
+"C# و .NET"            → ["C#"] [" و "] [".NET"]
 ```
+
+Characters written flush against a Latin token — `+963`, `.NET`, `$5`,
+`C#`, `C++` — belong to it and go into its run; sentence punctuation and `%`
+do not. Such tokens are also wrapped in invisible LRE…PDF marks, because
+LibreOffice and PDF viewers ignore run boundaries (see arabic-docx for the
+measurements).
 
 ### Bracket pairs are never split
 
@@ -162,6 +234,34 @@ half resolved Latin, and leaves alone pairs that resolved Arabic on both sides.
 
 **Any mirrored character has to share a run with its partner.** A pair split
 across a direction boundary always renders wrong.
+
+## Optional: if the deck is animated
+
+Nothing is animated by default, and nothing in this section is needed for a
+correct Arabic deck. Animation style is a matter of taste; what follows are
+the parts that are about direction, for decks that do animate.
+
+- **Directional effects read backwards.** Fly-in, wipe, push and cover enter
+  from the left by default. In an RTL deck they have to be mirrored (enter
+  from the right) or replaced with a direction-neutral effect such as fade.
+- **Builds follow reading order.** Items revealed one by one should appear
+  right to left, top row first. `reading_order(shapes)` sorts existing shapes
+  that way.
+
+The library ships one ready-made, direction-neutral option, opt-in:
+
+| Call | Effect |
+|---|---|
+| `ArabicPptx(transition="fade")` / `add_transition(slide, "fade")` | Fade between slides (`fade`, `dissolve` or `cut` only) |
+| `bullets_slide(..., reveal=True)` | One bullet per click |
+| `steps_slide(..., reveal=True)` | One step per click, in reading order |
+| `set_build(slide, steps, dur_ms=350, stagger_ms=60)` | Click-by-click fade builds for any shapes; a step is a list of shapes or `(shape, paragraph_index)` |
+
+`set_build` writes the structure PowerPoint itself saves for "Fade — On Click
+/ With Previous", after `p:transition` as the schema requires; PowerPoint
+opens it without repair and lists the effects in its Animation Pane. It
+replaces any animation already on the slide, so do not call it on a slide
+whose animations the user designed.
 
 ## Typography
 

@@ -147,7 +147,7 @@ this is why a missing font shows up as black boxes rather than an error.
 
 This is the most important boundary in the whole family of RTL skills.
 
-| | reportlab / Pillow | Word / PowerPoint |
+| | reportlab (and Pillow without libraqm) | Word / PowerPoint (and Pillow with libraqm) |
 |---|---|---|
 | Text engine | **none** | full bidirectional engine |
 | Expects | final visual-order glyphs | **raw logical-order Unicode** |
@@ -161,10 +161,38 @@ spell-checked. The two approaches are opposites, not variations.
 Use `arabic-docx` for `.docx` and `arabic-pptx` for `.pptx`. Do not port code
 between the three without re-reading why they differ.
 
+## Arabic text in images (Pillow)
+
+Pillow sits on either side of that line depending on how it was built. With
+libraqm (`PIL.features.check("raqm")` is `True` — standard in current wheels)
+it shapes and reorders logical text itself, and reshaped input would be
+shaped twice. Without it, text must be reshaped first. `draw_text()` picks
+the path at run time:
+
+```python
+from PIL import Image, ImageDraw, ImageFont
+from arabic_pdf import draw_text
+
+img = Image.new("RGB", (1600, 400), "white")
+font = ImageFont.truetype("Amiri-Regular.ttf", 48)
+draw_text(ImageDraw.Draw(img), (1560, 60), "قاعدة بيانات PostgreSQL", font)
+```
+
+The default anchor `"ra"` puts the right edge of the text at the point given.
+Size label fonts for the printed result: a label that must read at `min_pt`
+once the image is placed `placed_width_pt` wide needs
+`min_pt × image_width_px / placed_width_pt` pixels.
+
 ## Notes
 
 - `arabic_digits("38")` → `"٣٨"` when Arabic-Indic numerals are wanted. Purely
   cosmetic; Western digits are perfectly normal in Arabic technical writing.
+  Use one system per document, page numbers included:
+  `ArabicPDF(..., page_numbers=True, digits="western")` numbers pages 1, 2, 3;
+  the default `"arabic"` gives ١، ٢، ٣.
+- Glue a short Latin token to the Arabic word it belongs with using a no-break
+  space (U+00A0): `"لـ\u00a0Naproxen"` never breaks across lines. The wrapper
+  splits on ordinary spaces only, so the glue holds.
 - Keep formatting restrained by default — black text, thin rules. Academic and
   official Arabic documents read as more credible that way, and users asking for
   "simple" mean it.

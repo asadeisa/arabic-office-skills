@@ -235,6 +235,28 @@ def arabic_digits(text: str) -> str:
     return text.translate(ARABIC_DIGITS)
 
 
+def draw_text(draw, xy, text, font, fill="black", anchor="ra", **kw):
+    """Draw Arabic or mixed text onto a Pillow image — diagram labels, charts.
+
+    Pillow is not always engine-less. Built with libraqm (check
+    `PIL.features.check("raqm")`) it shapes and reorders logical text itself,
+    exactly like Word, and pre-shaped input would be shaped twice. Without
+    raqm it draws characters as given, so text must go through `shape()`
+    first, as for reportlab. This picks the right path at run time.
+
+    anchor "ra" puts the right edge of the text at `xy` — the natural anchor
+    for right-to-left labels. Size label fonts for the printed result: a label
+    that must read at `min_pt` once the image is placed `placed_width_pt` wide
+    needs `min_pt * image_width_px / placed_width_pt` pixels.
+    """
+    from PIL import features
+    if features.check("raqm"):
+        draw.text(xy, text, font=font, fill=fill, anchor=anchor,
+                  direction="rtl", language="ar", **kw)
+    else:
+        draw.text(xy, shape(text), font=font, fill=fill, anchor=anchor, **kw)
+
+
 def _escape(text: str) -> str:
     """Escape for reportlab's mini-XML — *after* shaping, never before.
 
@@ -257,7 +279,9 @@ def _wrap(text: str, style: ParagraphStyle, max_width: float) -> str:
     lines: list[str] = []
     for part in text.split("\n"):
         cur: list[str] = []
-        for word in part.split():
+        # split(" "), not split(): str.split() also breaks on U+00A0, which
+        # is exactly the no-break space used to glue `لـ\u00a0Naproxen`.
+        for word in (w for w in part.split(" ") if w):
             trial = " ".join(cur + [word])
             fits = pdfmetrics.stringWidth(shape(trial), style.fontName, style.fontSize) <= limit
             if not cur or fits:
@@ -286,11 +310,15 @@ class ArabicPDF:
     """
 
     def __init__(self, path, doc_title="", pagesize=A4, margin_cm=2.2,
-                 top_cm=2.0, bottom_cm=2.0, base_size=10.5, page_numbers=False):
+                 top_cm=2.0, bottom_cm=2.0, base_size=10.5, page_numbers=False,
+                 digits="arabic"):
         register_fonts()
         self.path = str(path)
         self.pagesize = pagesize
         self.page_numbers = page_numbers
+        # "arabic" → ١٢٣ page numbers, "western" → 123. Match the body text:
+        # one digit system per document.
+        self.digits = digits
         self.margin = margin_cm * cm
         self.top, self.bottom = top_cm * cm, bottom_cm * cm
         self.body_width = pagesize[0] - 2 * self.margin
@@ -390,7 +418,8 @@ class ArabicPDF:
         canvas.setFont(REG, 9)
         canvas.setFillColor(colors.black)
         canvas.drawCentredString(self.pagesize[0] / 2, self.bottom / 2,
-                                 shape(arabic_digits(str(doc.page))))
+                                 shape(arabic_digits(str(doc.page))
+                                       if self.digits == "arabic" else str(doc.page)))
         canvas.restoreState()
 
     def save(self):
@@ -430,4 +459,8 @@ def preview(pdf_path, out_dir=None, scale=2):
         png = out_dir / f"{pdf_path.stem}_p{i + 1}.png"
         pdf[i].render(scale=scale).to_pil().save(png)
         paths.append(str(png))
+    # Release the file handle: on Windows an open PdfDocument locks the PDF,
+    # and the next conversion to the same path fails inside Word/PowerPoint
+    # with a bare E_FAIL.
+    pdf.close()
     return paths
