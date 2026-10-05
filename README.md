@@ -1,5 +1,9 @@
 # Arabic Office Skills
 
+[![tests](https://github.com/asadeisa/arabic-office-skills/actions/workflows/tests.yml/badge.svg)](https://github.com/asadeisa/arabic-office-skills/actions/workflows/tests.yml)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 Three agent skills for producing **PDF, Word, and PowerPoint files in Arabic**
 — and any other right-to-left script — that actually render correctly.
 
@@ -77,12 +81,19 @@ And both Office libraries can **audit** and **repair** files made elsewhere:
 
 ```bash
 git clone https://github.com/asadeisa/arabic-office-skills.git
+mkdir -p ~/.claude/skills
 cp -r arabic-office-skills/arabic-* ~/.claude/skills/
 ```
 
-On Windows, copy the three folders into `C:\Users\<you>\.claude\skills\`.
+On Windows (PowerShell):
 
-Dependencies, by skill:
+```powershell
+git clone https://github.com/asadeisa/arabic-office-skills.git
+New-Item -ItemType Directory -Force "$HOME\.claude\skills" | Out-Null
+Copy-Item -Recurse arabic-office-skills\arabic-* "$HOME\.claude\skills\"
+```
+
+Python 3.10 or later. Dependencies, by skill:
 
 ```bash
 pip install reportlab arabic-reshaper python-bidi pypdfium2   # arabic-pdf
@@ -97,9 +108,13 @@ Generating the files needs neither.
 
 With Claude Code the skills trigger on their own — ask for an Arabic report,
 document, or deck. With any other agent or on their own, the libraries are plain
-Python:
+Python — single files with no package to install, so put the skill's `scripts/`
+folder on the path (or copy the `.py` file next to your script):
 
 ```python
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path.home() / ".claude/skills/arabic-pdf/scripts"))
+
 from arabic_pdf import ArabicPDF, preview
 
 pdf = ArabicPDF("تقرير.pdf")
@@ -127,14 +142,29 @@ for finding in audit_docx("report.docx"):
 fix_docx("report.docx", "report-fixed.docx")
 ```
 
-## Scripts
+## Persian, Urdu, and Hebrew
 
-Persian, Urdu, and Hebrew work the same way. For PDF only the font needs to
-cover the script; for PowerPoint pass the language too:
+They work the same way. For PDF only the font needs to cover the script; for
+PowerPoint pass the language too:
 
 ```python
 ArabicPptx(rtl_lang="fa-IR")   # also ur-PK, he-IL
 ```
+
+## Repository layout
+
+```text
+arabic-pdf/    SKILL.md + scripts/arabic_pdf.py    reportlab builder, draw_text, preview
+arabic-docx/   SKILL.md + scripts/arabic_docx.py   Word builder, audit_docx, fix_docx, preview
+arabic-pptx/   SKILL.md + scripts/arabic_pptx.py   PowerPoint builder, audit_pptx, fix_pptx, preview
+tests/         unit tests (pytest) and render_check.py
+docs/          README artwork
+```
+
+Each skill folder is self-contained and can be copied on its own. Its
+`SKILL.md` is the complete reference — the instructions an agent follows, the
+full API, the XML it writes, and a checklist for the rendered result — so read
+that, not this README, before generating files with a skill.
 
 ## Tests
 
@@ -143,10 +173,15 @@ pip install pytest python-docx python-pptx reportlab arabic-reshaper python-bidi
 pytest tests
 ```
 
+The same tests run in CI on Python 3.10, 3.12 and 3.14 for every push and pull
+request. They need neither Office nor LibreOffice.
+
 The unit tests check the XML. What a reader sees can only be checked by
 rendering: `python tests/render_check.py` builds sample files, audits them and
 renders them through the installed Word and PowerPoint (or LibreOffice) to
 `tests/out/`. Look at the PNGs before a release.
+
+What changed between versions is in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

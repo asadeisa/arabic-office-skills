@@ -1,0 +1,17 @@
+name: tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install pytest python-docx python-pptx reportlab arabic-reshaper python-bidi pypdfium2
+      - run: pytest -q tests
