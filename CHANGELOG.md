@@ -51,3 +51,9 @@ failed and then successful iterations, turned into generic functions.
   available), `digits=` for page numbers, and line wrapping no longer breaks
   no-break spaces.
 - Unit tests, a render check script, and CI.
+- A sign flush against a number (`-`, `+`, `−` U+2212, `±`) stays on its
+  left: arabic-pdf printed `−1.9` as `1.9−` in table cells and at line
+  starts, and Word/PowerPoint did the same for `−` and `±`.
+- arabic-pdf: SKILL.md lists the defects a correct builder cannot prevent
+  (long mixed paragraphs, `%%`, missing symbol glyphs, raw Arabic in figures,
+  a last line stranded on its own page).

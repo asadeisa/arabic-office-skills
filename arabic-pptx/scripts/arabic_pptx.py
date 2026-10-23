@@ -66,12 +66,13 @@ XML_NS = "http://www.w3.org/XML/1998/namespace"
 
 
 # Neutral characters that belong to a Latin token when written flush against it:
-# `+963`, `.NET`, `$5`, `@user` on the leading side; `C#`, `C++`, `50%` on the
-# trailing side. Left as neutrals they resolve Arabic, land in the RTL run and
-# are drawn on the far side of the token — `C#` renders as `#C`.
+# `+963`, `−0.42`, `±0.5`, `.NET`, `$5`, `@user` on the leading side; `C#`,
+# `C++`, `50%` on the trailing side. Left as neutrals they resolve Arabic, land
+# in the RTL run and are drawn on the far side of the token — `C#` renders as
+# `#C`, `−0.42` as `0.42−`.
 # `%` is deliberately absent: Arabic convention puts it on the left of the
 # number (٪٥٠ / %50), which is what the bidi algorithm already does.
-AFFIX_BEFORE = set("+-.#@$/~\\")
+AFFIX_BEFORE = set("+-−±.#@$/~\\")
 AFFIX_AFTER = set("+#")
 LRE, PDF = "\u202a", "\u202c"   # LEFT-TO-RIGHT EMBEDDING … POP DIRECTIONAL FORMATTING
 

@@ -130,6 +130,11 @@ MIRROR = str.maketrans({**BRACKETS, **CLOSERS})
 
 LRI, PDI = "⁦", "⁩"   # left-to-right isolate / pop directional isolate
 
+# A sign written flush against a number belongs to it. Left neutral it resolves
+# right-to-left whenever nothing Latin precedes it — a table cell, a line start —
+# and `−1.9` prints as `1.9−`.
+SIGNS = set("+-−±")
+
 
 def _bracket_pairs(text: str) -> list[tuple[int, int]]:
     """Return (open_index, close_index) for every matched mirrored pair."""
@@ -194,6 +199,9 @@ def prepare(text: str) -> str:
         else ("L" if prev_strong[i] == "L" and next_strong[i] == "L" else "A")
         for i, k in enumerate(kinds)
     ]
+    for i in range(n - 2, -1, -1):
+        if text[i] in SIGNS and text[i + 1].isdigit() and resolved[i + 1] == "L":
+            resolved[i] = "L"
     for i, j in _bracket_pairs(text):
         if (resolved[i] == "L" or resolved[j] == "L") and "A" not in kinds[i:j + 1]:
             resolved[i:j + 1] = ["L"] * (j - i + 1)

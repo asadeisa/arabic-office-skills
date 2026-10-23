@@ -85,6 +85,22 @@ correct; only their *order and shape* are wrong. Check specifically:
 - Do brackets face the right way — `(20 فأكثر)` not `)20 فأكثر(`?
 - Are pairs inside Latin terms intact — `Array<String>`, `DECIMAL(5,2)`?
 - Did a single table row get orphaned onto the next page?
+- Does a signed number keep its sign on the left — `−0.42`, not `0.42−`?
+
+Defects the builder cannot prevent, each found only in a render:
+
+- **A word stranded mid-paragraph.** A long paragraph mixing Arabic, Latin
+  and digits can still have one line re-flowed out of sequence. Split it into
+  shorter `para()` calls; they read the same and cannot desynchronise.
+- **`%%` in the page.** `"%.1f%%" % x` needs the doubled sign; a plain string
+  does not. Check every `%%` sits inside a format string.
+- **A black box for a symbol.** Subscripts and rarer maths symbols (`θ₂`) are
+  often missing from Arabic fonts. Reword in Arabic, or keep the notation in a
+  figure.
+- **Raw Arabic in a figure.** Label charts in English, or pass every Arabic
+  label through `shape()` (reportlab graphics) or `draw_text()` (Pillow).
+- **One line alone on the last page.** Put `page_break()` before the section
+  that overflows rather than trimming the text to fit.
 
 Fixing a defect you never looked for costs far more later, when the document is
 already with its recipient.
